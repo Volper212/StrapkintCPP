@@ -95,7 +95,7 @@ int main() {
         L"└─────────┘"
     } };
     std::vector<Text> visibleFixedTexts{ { 5, 0, 0, "" }, { viewportWidth - 5, 1, 3, "000" }, { viewportWidth - 5, 2, 3, "000" } };
-    std::vector<Level> levels{ { 200, 40, 0, 0,
+    std::vector<Level> levels{ { 200, 60, 0, 0,
         {
             {
                 0, 0, 3, 3,
@@ -147,6 +147,84 @@ int main() {
         bufferPosition = { 0, 0 };
     };
 
+    const auto moveHorizontally = [&level, &buffer, &adjustWriteRegion, &clearBuffer](int entity, double distance) {
+        Collision &collision = level.collisions[entity];
+        ConstText &text = level.visibleTexts[player];
+
+        const int viewportX = text.x - level.offsetX;
+        const int viewportY = viewportHeight - text.y + level.offsetY - text.height;
+
+        collision.x += distance;
+
+        if (distance < 0)
+            maxAssign(collision.x, 0.);
+        else
+            minAssign(collision.x, level.width - collision.width);
+
+        const int after = (int)round(collision.x);
+        const int difference = text.x - after;
+        if (!difference) return;
+
+        if (viewportX == viewportWidth / 3 && ((distance < 0) ? (level.offsetX > 0) : (level.offsetX + viewportWidth < level.width))) {
+            level.offsetX -= difference;
+            clearBuffer();
+        } else {
+            for (int currentY = 0; currentY < text.height; ++currentY) {
+                const int currentViewportY = viewportY + currentY;
+                if (currentViewportY + text.height < 0 || currentViewportY >= viewportHeight) continue;
+                for (int currentX = 0; currentX < text.width; ++currentX) {
+                    const int currentViewportX = viewportX + currentX;
+                    if (currentViewportX < 0 || currentViewportX >= viewportWidth) continue;
+                    buffer[currentViewportX + viewportWidth * currentViewportY].Char.UnicodeChar = '\0';
+                }
+            }
+            if (distance < 0)
+                adjustWriteRegion(viewportX - difference, viewportY, text.width + difference, text.height);
+            else
+                adjustWriteRegion(viewportX, viewportY, text.width - difference, text.height);
+        }
+        text.x = after;
+    };
+
+    const auto moveVertically = [&level, &buffer, &adjustWriteRegion, &clearBuffer](int entity, double distance) {
+        Collision &collision = level.collisions[entity];
+        ConstText &text = level.visibleTexts[player];
+
+        const int viewportX = text.x - level.offsetX;
+        const int viewportY = viewportHeight - text.y + level.offsetY - text.height;
+
+        collision.y += distance;
+
+        if (distance < 0)
+            maxAssign(collision.y, 0.);
+        else
+            minAssign(collision.y, level.height - collision.height);
+
+        const int after = (int)round(collision.y);
+        const int difference = text.y - after;
+        if (!difference) return;
+
+        if (viewportY == viewportHeight / 2 && ((distance < 0) ? (level.offsetY > 0) : (level.offsetY + viewportHeight < level.height))) {
+            level.offsetY -= difference;
+            clearBuffer();
+        } else {
+            for (int currentY = 0; currentY < text.height; ++currentY) {
+                const int currentViewportY = viewportY + currentY;
+                if (currentViewportY + text.height < 0 || currentViewportY >= viewportHeight) continue;
+                for (int currentX = 0; currentX < text.width; ++currentX) {
+                    const int currentViewportX = viewportX + currentX;
+                    if (currentViewportX < 0 || currentViewportX >= viewportWidth) continue;
+                    buffer[currentViewportX + viewportWidth * currentViewportY].Char.UnicodeChar = '\0';
+                }
+            }
+            if (distance < 0)
+                adjustWriteRegion(viewportX, viewportY, text.width, text.height + difference);
+            else
+                adjustWriteRegion(viewportX, viewportY + difference, text.width, text.height - difference);
+        }
+        text.y = after;
+    };
+
     // Game loop
     while (true) {
         const double dtSeconds = std::chrono::duration_cast<std::chrono::duration<double>>(deltaTime).count();
@@ -196,62 +274,19 @@ int main() {
         }
 
         if (pressedKeys.size()) {
-            Collision &collision = level.collisions[player];
-            ConstText &text = level.visibleTexts[player];
-
             for (const auto key : pressedKeys) {
-                if (key == VK_LEFT || key == VK_RIGHT) {
-                    const int viewportX = text.x - level.offsetX;
-                    const int viewportY = viewportHeight - text.y + level.offsetY - text.height;
-                    if (key == VK_LEFT) {
-                        collision.x -= dtSeconds * horizontalSpeed;
-                        maxAssign(collision.x, 0.);
-                        const int after = (int)round(collision.x);
-                        const int difference = text.x - after;
-                        if (!difference) continue;
-                        if (viewportX == viewportWidth / 3 && level.offsetX) {
-                            level.offsetX -= difference;
-                            clearBuffer();
-                            writeRegion = fullWriteRegion;
-                            bufferPosition = { 0, 0 };
-                        } else {
-                            for (int currentY = 0; currentY < text.height; ++currentY) {
-                                const int currentViewportY = viewportY + currentY;
-                                if (currentViewportY + text.height < 0 || currentViewportY >= viewportHeight) continue;
-                                for (int currentX = 0; currentX < text.width; ++currentX) {
-                                    const int currentViewportX = viewportX + currentX;
-                                    if (currentViewportX < 0 || currentViewportX >= viewportWidth) continue;
-                                    buffer[currentViewportX + viewportWidth * currentViewportY].Char.UnicodeChar = '\0';
-                                }
-                            }
-                        }
-                        adjustWriteRegion(viewportX - difference, viewportY, text.width + difference, text.height);
-                        text.x = after;
-                    } else {
-                        collision.x += dtSeconds * horizontalSpeed;
-                        minAssign(collision.x, level.width - collision.width);
-                        const int after = (int)round(collision.x);
-                        const int difference = text.x - after;
-                        if (!difference) continue;
-                        if (viewportX == viewportWidth / 3 && level.offsetX + viewportWidth < level.width) {
-                            level.offsetX -= difference;
-                            clearBuffer();
-                            writeRegion = fullWriteRegion;
-                            bufferPosition = { 0, 0 };
-                        } else {
-                            for (int currentY = 0; currentY < text.height; ++currentY) {
-                                const int currentViewportY = viewportY + currentY;
-                                if (currentViewportY + text.height < 0 || currentViewportY >= viewportHeight) continue;
-                                for (int currentX = 0; currentX < text.width; ++currentX) {
-                                    const int currentViewportX = viewportX + currentX;
-                                    if (currentViewportX < 0 || currentViewportX >= viewportWidth) continue;
-                                    buffer[currentViewportX + viewportWidth * currentViewportY].Char.UnicodeChar = '\0';
-                                }
-                            }
-                        }
-                        adjustWriteRegion(viewportX, viewportY, text.width - difference, text.height);
-                        text.x = after;
-                    }
+                switch (key) {
+                case VK_LEFT:
+                    moveHorizontally(player, -dtSeconds * horizontalSpeed);
+                    break;
+                case VK_RIGHT:
+                    moveHorizontally(player, dtSeconds * horizontalSpeed);
+                    break;
+                case VK_DOWN:
+                    moveVertically(player, -dtSeconds * horizontalSpeed / 2);
+                    break;
+                case VK_UP:
+                    moveVertically(player, dtSeconds * horizontalSpeed / 2);
                 }
             }
         }
