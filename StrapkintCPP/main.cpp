@@ -14,20 +14,26 @@ constexpr size_t lengthof(T(&array)[N]) {
     return N;
 }
 
-template<typename T>
-inline void maxAssign(T &variable, T value) {
-    if (variable < value)
+template<typename T, typename U>
+bool maxAssign(T &variable, U value) {
+    if (variable < value) {
         variable = value;
+        return true;
+    }
+    return false;
 }
 
-template<typename T>
-inline void minAssign(T &variable, T value) {
-    if (variable > value)
+template<typename T, typename U>
+bool minAssign(T &variable, U value) {
+    if (variable > value) {
         variable = value;
+        return true;
+    }
+    return false;
 }
 
 int main() {
-    constexpr int viewportWidth = 150, viewportHeight = 40, viewportArea = viewportWidth * viewportHeight;
+    constexpr int viewportWidth = 150, viewportHeight = 40, viewportArea = viewportWidth * viewportHeight, cameraX = viewportWidth / 3, cameraY = viewportHeight / 2;
     constexpr double horizontalSpeed = 20;
 
     // Setup
@@ -100,41 +106,41 @@ int main() {
         L"└─────────┘"
     } };
     std::vector<Text> visibleFixedTexts{ { 5, 0, 0, "" }, { viewportWidth - 5, 1, 3, "000" }, { viewportWidth - 5, 2, 3, "000" } };
+
+    constexpr ConstText playerText{
+        0, 0, 3, 3,
+        LR"( O )"
+        LR"(/|\)"
+        LR"(/ \)"
+    };
+
+    constexpr Collision playerCollision{ 0, 0, 3, 3 };
+
     std::vector<Level> levels{
         {
             200, 60, 0, 0,
             {
-                {
-                    0, 0, 3, 3,
-                    LR"( O )"
-                    LR"(/|\)"
-                    LR"(/ \)"
-                },
+                playerText,
                 {
                     70, 20, 12, 1,
                     L"testowe sqrt"
                 }
             },
             {
-                { 0, 0, 3, 3 }
+                playerCollision
             }
         },
         {
             150, 40, 0, 0,
             {
-                {
-                    0, 0, 3, 3,
-                    LR"( O )"
-                    LR"(/|\)"
-                    LR"(/ \)"
-                },
+                playerText,
                 {
                     10, 10, 3, 1,
                     L"tps"
                 }
             },
             {
-                { 0, 0, 3, 3 }
+                playerCollision
             }
         }
     };
@@ -156,12 +162,16 @@ int main() {
     bool tps = false;
 
     // Functions
-    const auto adjustWriteRegion = [&writeRegion, &bufferPosition](short x, short y, short width, short height = 1) {
+    const auto adjustWriteRegion = [&writeRegion, &bufferPosition](int x, int y, int width, int height = 1) {
         auto &[Left, Top, Right, Bottom] = writeRegion;
         minAssign(Left, x);
+        maxAssign(Left, 0);
         minAssign(Top, y);
-        maxAssign(Right, (short)(x + width - 1));
-        maxAssign(Bottom, (short)(y + height - 1));
+        maxAssign(Top, 0);
+        maxAssign(Right, x + width - 1);
+        minAssign(Right, viewportWidth - 1);
+        maxAssign(Bottom, y + height - 1);
+        minAssign(Bottom, viewportHeight - 1);
         bufferPosition = { Left, Top };
     };
 
@@ -174,13 +184,10 @@ int main() {
         std::string number = std::to_string(value);
         visibleFixedTexts[entity].text = std::string(3 - number.size(), '0') + number;
     };
-    
+
     const auto moveHorizontally = [&](double distance) {
         Collision &collision = level->collisions[player];
         ConstText &text = level->visibleTexts[player];
-
-        const int viewportX = text.x - level->offsetX;
-        const int viewportY = viewportHeight - text.y + level->offsetY - text.height;
 
         collision.x += distance;
 
@@ -191,48 +198,37 @@ int main() {
             short &after = level->visibleTexts[player].y;
             after = text.y;
             updateCounter(1, levelIndex);
-            if (after > viewportHeight / 2) {
-                level->offsetY = after - viewportHeight / 2;
+            if (after > cameraY) {
+                level->offsetY = after - cameraY;
                 minAssign(level->offsetY, level->height - viewportHeight);
             }
         };
 
-        if (collision.x < 0) {
-            collision.x = 0;
-            if (levelIndex > 0) {
-                changeLevel(--levelIndex);
-            }
-        } else if (collision.x > level->width - collision.width) {
-            collision.x = level->width - collision.width;
-            if (levelIndex < levels.size() - 1) {
-                changeLevel(++levelIndex);
-            }
-        }
+        if (maxAssign(collision.x, 0.) && levelIndex > 0)
+            return changeLevel(--levelIndex);
+        if (minAssign(collision.x, level->width - collision.width) && levelIndex < levels.size() - 1)
+            return changeLevel(++levelIndex);
 
         const int after = (int)round(collision.x);
         const int difference = text.x - after;
-
         if (!difference) return;
 
-        if (distance < 0) {
-            if (viewportX - difference < viewportWidth / 3) {
-                level->offsetX = after - viewportWidth / 3;
-                maxAssign(level->offsetX, 0);
-                fillWriteRegion();
-            }
+        const int before = level->offsetX;
+        level->offsetX = after - cameraX;
+        maxAssign(level->offsetX, 0);
+        minAssign(level->offsetX, level->width - viewportWidth);
+        if (before == level->offsetX) {
+            const int viewportX = text.x - level->offsetX;
+            const int viewportY = viewportHeight - text.y + level->offsetY - text.height;
+
+            if (distance < 0)
+                adjustWriteRegion(viewportX - difference, viewportY, text.width + difference, text.height);
+            else
+                adjustWriteRegion(viewportX, viewportY, text.width - difference, text.height);
         } else {
-            if (viewportX - difference > viewportWidth / 3) {
-                level->offsetX = after - viewportWidth / 3;
-                minAssign(level->offsetX, level->width - viewportWidth);
-                fillWriteRegion();
-            }
+            fillWriteRegion();
         }
 
-        if (distance < 0)
-            adjustWriteRegion(viewportX - difference, viewportY, text.width + difference, text.height);
-        else
-            adjustWriteRegion(viewportX, viewportY, text.width - difference, text.height);
-        
         text.x = after;
     };
 
@@ -240,39 +236,30 @@ int main() {
         Collision &collision = level->collisions[player];
         ConstText &text = level->visibleTexts[player];
 
-        const int viewportX = text.x - level->offsetX;
-        const int viewportY = viewportHeight - text.y + level->offsetY - text.height;
-
         collision.y += distance;
 
-        if (distance < 0)
-            maxAssign(collision.y, 0.);
-        else
-            minAssign(collision.y, level->height - collision.height);
+        maxAssign(collision.y, 0.);
 
         const int after = (int)round(collision.y);
         const int difference = text.y - after;
         if (!difference) return;
 
-        if (distance < 0) {
-            if (text.y - level->offsetY - difference < viewportHeight / 2) {
-                level->offsetY = after - viewportHeight / 2;
-                maxAssign(level->offsetY, 0);
-                fillWriteRegion();
-            }
+        const int before = level->offsetY;
+        level->offsetY = after - cameraY;
+        maxAssign(level->offsetY, 0);
+        minAssign(level->offsetY, level->height - viewportHeight);
+        if (before == level->offsetY) {
+            const int viewportX = text.x - level->offsetX;
+            const int viewportY = viewportHeight - text.y + level->offsetY - text.height;
+
+            if (distance < 0)
+                adjustWriteRegion(viewportX, viewportY, text.width, text.height + difference);
+            else
+                adjustWriteRegion(viewportX, viewportY + difference, text.width, text.height - difference);
         } else {
-            if (text.y - level->offsetY - difference > viewportHeight / 2) {
-                level->offsetY = after - viewportHeight / 2;
-                minAssign(level->offsetY, level->height - viewportHeight);
-                fillWriteRegion();
-            }
+            fillWriteRegion();
         }
 
-        if (distance < 0)
-            adjustWriteRegion(viewportX, viewportY, text.width, text.height + difference);
-        else
-            adjustWriteRegion(viewportX, viewportY + difference, text.width, text.height - difference);
-        
         text.y = after;
     };
 
