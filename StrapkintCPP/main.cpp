@@ -1,8 +1,13 @@
 ﻿#define NOMINMAX
-#include <Windows.h>
 #include <chrono>
 #include <string>
 #include <unordered_set>
+#include <future>
+#include <fstream>
+#include <WS2tcpip.h>
+#include <Windows.h>
+
+#pragma comment (lib, "ws2_32.lib")
 
 template<typename T, size_t N>
 constexpr size_t lengthof(T(&array)[N]) {
@@ -95,25 +100,46 @@ int main() {
         L"└─────────┘"
     } };
     std::vector<Text> visibleFixedTexts{ { 5, 0, 0, "" }, { viewportWidth - 5, 1, 3, "000" }, { viewportWidth - 5, 2, 3, "000" } };
-    std::vector<Level> levels{ { 200, 60, 0, 0,
+    std::vector<Level> levels{
         {
+            200, 60, 0, 0,
             {
-                0, 0, 3, 3,
-                LR"( O )"
-                LR"(/|\)"
-                LR"(/ \)"
+                {
+                    0, 0, 3, 3,
+                    LR"( O )"
+                    LR"(/|\)"
+                    LR"(/ \)"
+                },
+                {
+                    70, 20, 12, 1,
+                    L"testowe sqrt"
+                }
             },
             {
-                70, 20, 12, 1,
-                L"testowe sqrt"
+                { 0, 0, 3, 3 }
             }
         },
         {
-            { 0, 0, 3, 3 }
+            150, 40, 0, 0,
+            {
+                {
+                    0, 0, 3, 3,
+                    LR"( O )"
+                    LR"(/|\)"
+                    LR"(/ \)"
+                },
+                {
+                    10, 10, 3, 1,
+                    L"tps"
+                }
+            },
+            {
+                { 0, 0, 3, 3 }
+            }
         }
-    } };
-    int levelIndex = 0;
-    Level &level = levels[levelIndex];
+    };
+    unsigned levelIndex = 0;
+    Level *level = &levels[levelIndex];
 
     const int player = 0;
 
@@ -139,89 +165,114 @@ int main() {
         bufferPosition = { Left, Top };
     };
 
-    const auto clearBuffer = [&buffer, &writeRegion, &bufferPosition, &fullWriteRegion] {
-        for (size_t i = 0; i < viewportArea; ++i) {
-            buffer[i].Char.UnicodeChar = '\0';
-        }
+    const auto fillWriteRegion = [&writeRegion, &bufferPosition, &fullWriteRegion] {
         writeRegion = fullWriteRegion;
         bufferPosition = { 0, 0 };
     };
 
-    const auto moveHorizontally = [&level, &buffer, &adjustWriteRegion, &clearBuffer](int entity, double distance) {
-        Collision &collision = level.collisions[entity];
-        ConstText &text = level.visibleTexts[player];
+    const auto updateCounter = [&](int entity, int value) {
+        std::string number = std::to_string(value);
+        visibleFixedTexts[entity].text = std::string(3 - number.size(), '0') + number;
+    };
+    
+    const auto moveHorizontally = [&](double distance) {
+        Collision &collision = level->collisions[player];
+        ConstText &text = level->visibleTexts[player];
 
-        const int viewportX = text.x - level.offsetX;
-        const int viewportY = viewportHeight - text.y + level.offsetY - text.height;
+        const int viewportX = text.x - level->offsetX;
+        const int viewportY = viewportHeight - text.y + level->offsetY - text.height;
 
         collision.x += distance;
 
-        if (distance < 0)
-            maxAssign(collision.x, 0.);
-        else
-            minAssign(collision.x, level.width - collision.width);
+        const auto changeLevel = [&](int levelIndex) {
+            level = &levels[levelIndex];
+            fillWriteRegion();
+            level->collisions[player].y = collision.y;
+            short &after = level->visibleTexts[player].y;
+            after = text.y;
+            updateCounter(1, levelIndex);
+            if (after > viewportHeight / 2) {
+                level->offsetY = after - viewportHeight / 2;
+                minAssign(level->offsetY, level->height - viewportHeight);
+            }
+        };
+
+        if (collision.x < 0) {
+            collision.x = 0;
+            if (levelIndex > 0) {
+                changeLevel(--levelIndex);
+            }
+        } else if (collision.x > level->width - collision.width) {
+            collision.x = level->width - collision.width;
+            if (levelIndex < levels.size() - 1) {
+                changeLevel(++levelIndex);
+            }
+        }
 
         const int after = (int)round(collision.x);
         const int difference = text.x - after;
+
         if (!difference) return;
 
-        if (viewportX == viewportWidth / 3 && ((distance < 0) ? (level.offsetX > 0) : (level.offsetX + viewportWidth < level.width))) {
-            level.offsetX -= difference;
-            clearBuffer();
-        } else {
-            for (int currentY = 0; currentY < text.height; ++currentY) {
-                const int currentViewportY = viewportY + currentY;
-                if (currentViewportY + text.height < 0 || currentViewportY >= viewportHeight) continue;
-                for (int currentX = 0; currentX < text.width; ++currentX) {
-                    const int currentViewportX = viewportX + currentX;
-                    if (currentViewportX < 0 || currentViewportX >= viewportWidth) continue;
-                    buffer[currentViewportX + viewportWidth * currentViewportY].Char.UnicodeChar = '\0';
-                }
+        if (distance < 0) {
+            if (viewportX - difference < viewportWidth / 3) {
+                level->offsetX = after - viewportWidth / 3;
+                maxAssign(level->offsetX, 0);
+                fillWriteRegion();
             }
-            if (distance < 0)
-                adjustWriteRegion(viewportX - difference, viewportY, text.width + difference, text.height);
-            else
-                adjustWriteRegion(viewportX, viewportY, text.width - difference, text.height);
+        } else {
+            if (viewportX - difference > viewportWidth / 3) {
+                level->offsetX = after - viewportWidth / 3;
+                minAssign(level->offsetX, level->width - viewportWidth);
+                fillWriteRegion();
+            }
         }
+
+        if (distance < 0)
+            adjustWriteRegion(viewportX - difference, viewportY, text.width + difference, text.height);
+        else
+            adjustWriteRegion(viewportX, viewportY, text.width - difference, text.height);
+        
         text.x = after;
     };
 
-    const auto moveVertically = [&level, &buffer, &adjustWriteRegion, &clearBuffer](int entity, double distance) {
-        Collision &collision = level.collisions[entity];
-        ConstText &text = level.visibleTexts[player];
+    const auto moveVertically = [&](double distance) {
+        Collision &collision = level->collisions[player];
+        ConstText &text = level->visibleTexts[player];
 
-        const int viewportX = text.x - level.offsetX;
-        const int viewportY = viewportHeight - text.y + level.offsetY - text.height;
+        const int viewportX = text.x - level->offsetX;
+        const int viewportY = viewportHeight - text.y + level->offsetY - text.height;
 
         collision.y += distance;
 
         if (distance < 0)
             maxAssign(collision.y, 0.);
         else
-            minAssign(collision.y, level.height - collision.height);
+            minAssign(collision.y, level->height - collision.height);
 
         const int after = (int)round(collision.y);
         const int difference = text.y - after;
         if (!difference) return;
 
-        if (viewportY == viewportHeight / 2 && ((distance < 0) ? (level.offsetY > 0) : (level.offsetY + viewportHeight < level.height))) {
-            level.offsetY -= difference;
-            clearBuffer();
-        } else {
-            for (int currentY = 0; currentY < text.height; ++currentY) {
-                const int currentViewportY = viewportY + currentY;
-                if (currentViewportY + text.height < 0 || currentViewportY >= viewportHeight) continue;
-                for (int currentX = 0; currentX < text.width; ++currentX) {
-                    const int currentViewportX = viewportX + currentX;
-                    if (currentViewportX < 0 || currentViewportX >= viewportWidth) continue;
-                    buffer[currentViewportX + viewportWidth * currentViewportY].Char.UnicodeChar = '\0';
-                }
+        if (distance < 0) {
+            if (text.y - level->offsetY - difference < viewportHeight / 2) {
+                level->offsetY = after - viewportHeight / 2;
+                maxAssign(level->offsetY, 0);
+                fillWriteRegion();
             }
-            if (distance < 0)
-                adjustWriteRegion(viewportX, viewportY, text.width, text.height + difference);
-            else
-                adjustWriteRegion(viewportX, viewportY + difference, text.width, text.height - difference);
+        } else {
+            if (text.y - level->offsetY - difference > viewportHeight / 2) {
+                level->offsetY = after - viewportHeight / 2;
+                minAssign(level->offsetY, level->height - viewportHeight);
+                fillWriteRegion();
+            }
         }
+
+        if (distance < 0)
+            adjustWriteRegion(viewportX, viewportY, text.width, text.height + difference);
+        else
+            adjustWriteRegion(viewportX, viewportY + difference, text.width, text.height - difference);
+        
         text.y = after;
     };
 
@@ -241,18 +292,21 @@ int main() {
                 maxAssign(renderLength, text.size());
                 timeCounter = std::chrono::nanoseconds(0);
                 frameCounter = 0;
-                adjustWriteRegion(x, y, renderLength);
+                adjustWriteRegion(x, y, (short)renderLength);
             }
         }
 
         // Render
         if (writeRegion.Right >= 0) {
-            for (const auto &[x, y, width, height, text] : level.visibleTexts) {
+            for (size_t i = 0; i < viewportArea; ++i) {
+                buffer[i].Char.UnicodeChar = '\0';
+            }
+            for (const auto &[x, y, width, height, text] : level->visibleTexts) {
                 for (int currentY = 0; currentY < height; ++currentY) {
-                    const int viewportY = viewportHeight - y + currentY + level.offsetY - height;
+                    const int viewportY = viewportHeight - y + currentY + level->offsetY - height;
                     if (viewportY + height < 0 || viewportY >= viewportHeight) continue;
                     for (int currentX = 0; currentX < width; ++currentX) {
-                        const int viewportX = x + currentX - level.offsetX;
+                        const int viewportX = x + currentX - level->offsetX;
                         if (viewportX < 0 || viewportX >= viewportWidth) continue;
                         buffer[viewportX + viewportWidth * viewportY].Char.UnicodeChar = text[currentX + width * currentY];
                     }
@@ -262,13 +316,9 @@ int main() {
                 for (int currentY = 0; currentY < height; ++currentY)
                     for (int currentX = 0; currentX < width; ++currentX)
                         buffer[x + currentX + viewportWidth * (y + currentY)].Char.UnicodeChar = text[currentX + width * currentY];
-            for (const auto &[x, y, renderLength, text] : visibleFixedTexts) {
-                size_t i = 0;
-                for (; i < text.size(); ++i)
+            for (const auto &[x, y, renderLength, text] : visibleFixedTexts)
+                for (size_t i = 0; i < text.size(); ++i)
                     buffer[x + i + viewportWidth * y].Char.UnicodeChar = text[i];
-                for (; i < renderLength; ++i)
-                    buffer[x + i + viewportWidth * y].Char.UnicodeChar = '\0';
-            }
             WriteConsoleOutputW(handle, buffer, bufferSize, bufferPosition, &writeRegion);
             writeRegion = noWriteRegion;
         }
@@ -277,16 +327,16 @@ int main() {
             for (const auto key : pressedKeys) {
                 switch (key) {
                 case VK_LEFT:
-                    moveHorizontally(player, -dtSeconds * horizontalSpeed);
+                    moveHorizontally(-dtSeconds * horizontalSpeed);
                     break;
                 case VK_RIGHT:
-                    moveHorizontally(player, dtSeconds * horizontalSpeed);
+                    moveHorizontally(dtSeconds * horizontalSpeed);
                     break;
                 case VK_DOWN:
-                    moveVertically(player, -dtSeconds * horizontalSpeed / 2);
+                    moveVertically(-dtSeconds * horizontalSpeed / 2);
                     break;
                 case VK_UP:
-                    moveVertically(player, dtSeconds * horizontalSpeed / 2);
+                    moveVertically(dtSeconds * horizontalSpeed / 2);
                 }
             }
         }
@@ -295,7 +345,7 @@ int main() {
         GetNumberOfConsoleInputEvents(inputHandle, &eventsRead);
         if (eventsRead) {
             ReadConsoleInputW(inputHandle, inputRecords, lengthof(inputRecords), &eventsRead);
-            for (int i = 0; i < eventsRead; ++i) {
+            for (unsigned long i = 0; i < eventsRead; ++i) {
                 if (inputRecords[i].EventType != KEY_EVENT) continue;
                 KEY_EVENT_RECORD event = inputRecords[i].Event.KeyEvent;
                 if (event.bKeyDown) {
@@ -308,8 +358,7 @@ int main() {
                         for (size_t i = 0; i < viewportArea; ++i)
                             buffer[i].Attributes ^= 0xff;
                         coinColor ^= 0x07;
-                        writeRegion = fullWriteRegion;
-                        bufferPosition = { 0, 0 };
+                        fillWriteRegion();
                         tpsSequence = 1;
                         break;
                     case 0x50: // P
